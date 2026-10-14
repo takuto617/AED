@@ -1,4 +1,4 @@
-/* AEDナビ — script.js
+/* 日田市AEDナビ — script.js（大分県日田市専用）
  * AED.xlsx を読み込み、出発地から最も近い（徒歩経路が最短の）AEDへの経路を表示する。
  *
  * 最短経路の求め方:
@@ -19,9 +19,18 @@
     routeTimeoutMs: 9000,
     tileUrl: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
     tileAttribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">国土地理院</a>',
-    defaultCenter: [35.68, 139.76],
-    defaultZoom: 5
+    // 日田市（JR日田駅付近）を初期表示の中心にする
+    defaultCenter: [33.3213, 130.9416],
+    defaultZoom: 14,
+    minZoom: 9,
+    // 日田市全域を余裕を持って含む範囲（南端〜北端, 西端〜東端）。市外判定に使う
+    areaBounds: { south: 33.05, north: 33.60, west: 130.55, east: 131.35 },
+    areaName: '日田市'
   };
+
+  const inArea = (p) =>
+    p.lat >= CONFIG.areaBounds.south && p.lat <= CONFIG.areaBounds.north &&
+    p.lng >= CONFIG.areaBounds.west && p.lng <= CONFIG.areaBounds.east;
 
   /* Excel見出しの別名（正規化後の文字列で比較） */
   const HEADER_ALIASES = {
@@ -45,6 +54,7 @@
     selected: null,
     picking: false,
     only24: false,
+    outside: false,          // 出発地が日田市周辺の外か
     token: 0                 // 検索の競合防止
   };
 
@@ -161,7 +171,7 @@
 
   /* ===== 地図 ===== */
   function initMap() {
-    map = L.map(ui.map, { zoomControl: false }).setView(CONFIG.defaultCenter, CONFIG.defaultZoom);
+    map = L.map(ui.map, { zoomControl: false, minZoom: CONFIG.minZoom }).setView(CONFIG.defaultCenter, CONFIG.defaultZoom);
     L.control.zoom({ position: 'bottomright', zoomInTitle: '拡大', zoomOutTitle: '縮小' }).addTo(map);
     L.tileLayer(CONFIG.tileUrl, {
       maxZoom: 18,
@@ -199,7 +209,10 @@
       marker.on('click', () => showAED(aed));
       state.markers.set(aed.id, marker);
     });
-    map.fitBounds(L.latLngBounds(state.aeds.map((a) => [a.lat, a.lng])).pad(0.2));
+    const local = state.aeds.filter(inArea);
+    if (local.length) {
+      map.fitBounds(L.latLngBounds(local.map((a) => [a.lat, a.lng])).pad(0.2), { maxZoom: 15 });
+    }
   }
 
   function refreshIcons() {
@@ -321,6 +334,7 @@
     if (!state.start) return;
     const token = ++state.token;
 
+    state.outside = !inArea(state.start);
     setStatus('最短経路を計算中…', 'busy');
     ui.result.hidden = true;
     ui.candidates.hidden = true;
@@ -349,7 +363,9 @@
     await showAED(best.aed);
 
     if (token !== state.token) return;
-    if (offline) {
+    if (state.outside) {
+      setStatus('出発地が' + CONFIG.areaName + '周辺の外です。このアプリは' + CONFIG.areaName + '内のAEDのみ対象です。', 'error');
+    } else if (offline) {
       setStatus('一部の経路を取得できなかったため、直線距離から概算しています。', 'error');
     } else {
       setStatus('最寄りのAEDまでの最短経路を表示しました。');
@@ -494,9 +510,11 @@
 
       ui.btnLocate.disabled = false;
       ui.btnPick.disabled = false;
+      const outCount = aeds.filter((a) => !inArea(a)).length;
       ui.dataInfo.textContent = 'AEDデータ: ' + aeds.length + '件を登録' +
-        (skipped ? '（座標不備の' + skipped + '件を除く）' : '');
-      setStatus('ボタンを押すと、現在地から最も近いAEDを探します。');
+        (skipped ? '（座標不備の' + skipped + '件を除く）' : '') +
+        (outCount ? '／' + CONFIG.areaName + '外の座標が' + outCount + '件あります' : '');
+      setStatus('ボタンを押すと、現在地から最も近い' + CONFIG.areaName + '内のAEDを探します。');
     } catch (e) {
       const messages = {
         fetch: 'AED.xlsx を読み込めません。GitHub Pages上、またはローカルサーバー（例: python -m http.server）で開いてください。',
